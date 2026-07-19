@@ -82,6 +82,9 @@ bot.Dataset = newDataset
 
 #### Change fallback responses
 
+> [!NOTE]
+> Currently manually changed fallback responses are not saved upon restarting the bot and will revert to the default fallback responses unless you specifically set them each time.
+
 ```go
 bot := ada.NewAda()
 newFallback := []string{
