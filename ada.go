@@ -18,12 +18,15 @@ import (
 	"gonum.org/v1/gonum/mat"
 )
 
+// Ada struct holding data shared across all Sessions
+// created from this instance.
 type Ada struct {
 	mu       sync.RWMutex
 	Dataset  Dataset
 	Fallback []string
 }
 
+// Single session used for chatting with Ada.
 type Session struct {
 	ada          *Ada
 	lastResponse *string
@@ -51,7 +54,7 @@ var defaultDataset = []MessagePair{
 	{Input: "What do you like?", Response: "I like chatting with you!"},
 }
 
-// Pre-defined fallback responses if no response could be found
+// Pre-defined fallback responses if no response could be found.
 var fallbackDataset = []string{
 	"Interesting!",
 	"Tell me more.",
@@ -60,7 +63,7 @@ var fallbackDataset = []string{
 	"Go on.",
 }
 
-// Creates a new Ada instance with default parameters
+// Creates a new Ada instance with default parameters.
 func NewAda() *Ada {
 	return &Ada{
 		Dataset:  Dataset{Pairs: defaultDataset},
@@ -68,6 +71,7 @@ func NewAda() *Ada {
 	}
 }
 
+// Creates a new session for chatting to Ada.
 func (ada *Ada) NewSession() *Session {
 	return &Session{ada: ada}
 }
@@ -98,6 +102,9 @@ func (ada *Ada) LoadDataset(path string) *Ada {
 	return ada
 }
 
+// Saves dataset to .json file from current Ada instance.
+//
+// This operation overwrites any existing data in file.
 func (ada *Ada) SaveDataset(path string) {
 	data, err := json.MarshalIndent(ada.Dataset, "", "  ")
 	if err != nil {
@@ -138,7 +145,13 @@ func (ada *Ada) buildVectorizer() *vectorizerSnapshot {
 	return &vectorizerSnapshot{pipeline: vectorizer, vectors: inputVectors, pairs: pairs}
 }
 
-func (ada *Ada) FindBestResponse(snap *vectorizerSnapshot, input string, topN int) (*string, float64) {
+// Returns best response to input string found in database along with score [0..1] (roughly)
+//
+// topN - how many of the top responses to consider for response
+//
+// Lower score - less confident in response, higher score - more confident in response
+// Requires at least 0.2 score to return response from database, otherwise, returns nil
+func (ada *Ada) findBestResponse(snap *vectorizerSnapshot, input string, topN int) (*string, float64) {
 	userMatrix, err := snap.pipeline.Transform(input)
 	if err != nil {
 		// TODO: Proper error handling
@@ -249,7 +262,7 @@ func (s *Session) GetResponse(input string) string {
 	}
 
 	snap := s.ada.buildVectorizer()
-	reply, score := s.ada.FindBestResponse(snap, input, 3)
+	reply, score := s.ada.findBestResponse(snap, input, 3)
 
 	// No best response found, using fallback
 	if reply == nil {
