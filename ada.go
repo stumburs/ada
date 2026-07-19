@@ -5,7 +5,6 @@ package ada
 
 import (
 	"encoding/json"
-	"log"
 	"math"
 	"math/rand"
 	"os"
@@ -245,12 +244,17 @@ func columnVector(m mat.Matrix, col int) *mat.VecDense {
 // If no "good enough" response could be found, returns a random
 // string from the fallback dataset.
 //
-// This function also trains the database with the new input
-func (s *Session) GetResponse(input string) string {
+// This function also trains the database with the new input.
+//
+// 2nd return parameter is response confidence.
+// Lower score - less confident in response, higher score - more confident in response.
+// This value ranges from [0..1] (approximately)
+// Values below 0.2 are treated as not confident enough and will return fallback strings.
+func (s *Session) GetResponse(input string) (string, float64) {
 	input = strings.TrimSpace(input)
 	// No input
 	if input == "" {
-		return ""
+		return "", 0.0
 	}
 
 	// Train
@@ -270,7 +274,6 @@ func (s *Session) GetResponse(input string) string {
 		reply = &fallback
 	}
 
-	log.Println("Score:", score)
 	s.lastResponse = reply
-	return *reply
+	return *reply, score
 }
