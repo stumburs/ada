@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/james-bowman/nlp"
 	"github.com/james-bowman/nlp/measures/pairwise"
@@ -18,8 +19,13 @@ import (
 )
 
 type Ada struct {
-	Dataset      Dataset
-	Fallback     []string
+	mu       sync.RWMutex
+	Dataset  Dataset
+	Fallback []string
+}
+
+type Session struct {
+	ada          *Ada
 	lastResponse *string
 }
 
@@ -62,6 +68,10 @@ func NewAda() *Ada {
 	}
 }
 
+func (ada *Ada) NewSession() *Session {
+	return &Session{ada: ada}
+}
+
 // Loads dataset from .json dataset into Ada instance.
 //
 // This operation overwrites any existing dataset in instance.
@@ -97,10 +107,21 @@ func (ada *Ada) SaveDataset(path string) {
 	os.WriteFile(path, data, 0644)
 }
 
-func (ada *Ada) buildVectorizer() (*nlp.Pipeline, mat.Matrix) {
-	inputs := make([]string, len(ada.Dataset.Pairs))
-	for i, doc := range ada.Dataset.Pairs {
-		inputs[i] = doc.Input
+type vectorizerSnapshot struct {
+	pipeline *nlp.Pipeline
+	vectors  mat.Matrix
+	pairs    []MessagePair
+}
+
+func (ada *Ada) buildVectorizer() *vectorizerSnapshot {
+	ada.mu.RLock()
+	pairs := make([]MessagePair, len(ada.Dataset.Pairs))
+	copy(pairs, ada.Dataset.Pairs)
+	ada.mu.RUnlock()
+
+	inputs := make([]string, len(pairs))
+	for i, p := range pairs {
+		inputs[i] = p.Input
 	}
 
 	vectorizer := nlp.NewPipeline(
@@ -114,11 +135,11 @@ func (ada *Ada) buildVectorizer() (*nlp.Pipeline, mat.Matrix) {
 		panic(err)
 	}
 
-	return vectorizer, inputVectors
+	return &vectorizerSnapshot{pipeline: vectorizer, vectors: inputVectors, pairs: pairs}
 }
 
-func (ada *Ada) FindBestResponse(vectorizer *nlp.Pipeline, inputVectors mat.Matrix, input string, topN int) (*string, float64) {
-	userMatrix, err := vectorizer.Transform(input)
+func (ada *Ada) FindBestResponse(snap *vectorizerSnapshot, input string, topN int) (*string, float64) {
+	userMatrix, err := snap.pipeline.Transform(input)
 	if err != nil {
 		// TODO: Proper error handling
 		panic(err)
@@ -126,11 +147,11 @@ func (ada *Ada) FindBestResponse(vectorizer *nlp.Pipeline, inputVectors mat.Matr
 
 	userVec := columnVector(userMatrix, 0)
 
-	_, numDocs := inputVectors.Dims()
+	_, numDocs := snap.vectors.Dims()
 
 	sims := make([]float64, numDocs)
 	for i := range numDocs {
-		s := pairwise.CosineSimilarity(userVec, columnVector(inputVectors, i))
+		s := pairwise.CosineSimilarity(userVec, columnVector(snap.vectors, i))
 		if math.IsNaN(s) {
 			s = 0
 		}
@@ -182,7 +203,7 @@ func (ada *Ada) FindBestResponse(vectorizer *nlp.Pipeline, inputVectors mat.Matr
 		return nil, score
 	}
 
-	response := ada.Dataset.Pairs[chosenIdx].Response
+	response := snap.pairs[chosenIdx].Response
 	return &response, score
 }
 
@@ -212,7 +233,7 @@ func columnVector(m mat.Matrix, col int) *mat.VecDense {
 // string from the fallback dataset.
 //
 // This function also trains the database with the new input
-func (ada *Ada) GetResponse(input string) string {
+func (s *Session) GetResponse(input string) string {
 	input = strings.TrimSpace(input)
 	// No input
 	if input == "" {
@@ -220,22 +241,23 @@ func (ada *Ada) GetResponse(input string) string {
 	}
 
 	// Train
-	if ada.lastResponse != nil {
-		newPair := MessagePair{Input: *ada.lastResponse, Response: input}
-		ada.Dataset.Pairs = append(ada.Dataset.Pairs, newPair)
+	if s.lastResponse != nil {
+		newPair := MessagePair{Input: *s.lastResponse, Response: input}
+		s.ada.mu.Lock()
+		s.ada.Dataset.Pairs = append(s.ada.Dataset.Pairs, newPair)
+		s.ada.mu.Unlock()
 	}
 
-	vectorizer, mat := ada.buildVectorizer()
-
-	reply, score := ada.FindBestResponse(vectorizer, mat, input, 3)
+	snap := s.ada.buildVectorizer()
+	reply, score := s.ada.FindBestResponse(snap, input, 3)
 
 	// No best response found, using fallback
 	if reply == nil {
-		reply = &ada.Fallback[rand.Intn(len(ada.Fallback))]
+		fallback := s.ada.Fallback[rand.Intn(len(s.ada.Fallback))]
+		reply = &fallback
 	}
 
 	log.Println("Score:", score)
-
-	ada.lastResponse = reply
+	s.lastResponse = reply
 	return *reply
 }
