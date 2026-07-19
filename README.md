@@ -39,7 +39,6 @@ func main() {
 		fmt.Print("> ")
 		input, _ := reader.ReadString('\n')
 		input = strings.ReplaceAll(input, "\n", "")
-        // Get response from the bot session and print it
 
         // Get response and confidence score from the session
         response, confidence := session.GetResponse(input)
